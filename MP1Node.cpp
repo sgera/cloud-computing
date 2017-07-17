@@ -126,7 +126,7 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
     if ( 0 == memcmp((char *)&(memberNode->addr.addr), (char *)&(joinaddr->addr), sizeof(memberNode->addr.addr))) {
         // I am the group booter (first process to join the group). Boot up the group
 #ifdef DEBUGLOG
-        log->LOG(&memberNode->addr, "Starting up group...");
+        log->LOG(&memberNode->addr, "Introducer: Starting up the group...");
 #endif
         memberNode->inGroup = true;
     }
@@ -140,7 +140,7 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         memcpy((char *)(msg+1) + 1 + sizeof(memberNode->addr.addr), &memberNode->heartbeat, sizeof(long));
 
 #ifdef DEBUGLOG
-        sprintf(s, "Trying to join...");
+        sprintf(s, "Peer: Trying to join the group...");
         log->LOG(&memberNode->addr, s);
 #endif
 
@@ -151,7 +151,6 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
     }
 
     return 1;
-
 }
 
 /**
@@ -215,9 +214,30 @@ void MP1Node::checkMessages() {
  * DESCRIPTION: Message handler for different message types
  */
 bool MP1Node::recvCallBack(void *env, char *data, int size ) {
-	/*
-	 * Your code goes here
-	 */
+   
+    MessageHdr *msg = (MessageHdr*) data;
+    
+    Address* addressPtr = new Address();
+    memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
+    
+    long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
+    Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
+    
+#ifdef DEBUGLOG
+    static char s[1024];
+
+    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tInited: %d\tInGroup: %d", 
+        msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
+        *(short*)&addressPtr->addr[4], *heartBeat, currMemberNode->inited, currMemberNode->inGroup);
+    
+    log->LOG(&memberNode->addr, s);
+        
+//    sprintf(s, "CurrAddress %d.%d.%d.%d:%d",  currMemberNode->addr.addr[0],currMemberNode->addr.addr[1],currMemberNode->addr.addr[2], currMemberNode->addr.addr[3], *(short*)&currMemberNode->addr.addr[4]) ;    
+//    log->LOG(&memberNode->addr, s);
+#endif
+
+    //TODO: Who frees memory in case of receive message?
+    return true;
 }
 
 /**
