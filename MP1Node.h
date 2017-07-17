@@ -55,7 +55,8 @@ private:
 	Params *par;
 	Member *memberNode;
 	char NULLADDR[6];
-
+    bool isIntroducer;
+    
 public:
 	MP1Node(Member *, Params *, EmulNet *, Log *, Address *);
 	Member * getMemberNode() {
