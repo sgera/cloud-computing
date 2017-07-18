@@ -114,9 +114,8 @@ int MP1Node::initThisNode(Address *joinaddr) {
 	memberNode->heartbeat = 0;
 	memberNode->pingCounter = TFAIL;
 	memberNode->timeOutCounter = -1;
-  initMemberListTable(memberNode);
-  
-  return 0;
+	initMemberListTable(memberNode);
+    return 0;
 }
 
 /**
@@ -237,9 +236,9 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     
 #ifdef DEBUGLOG
         static char s[1024];
-        sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tInited: %d\tInGroup: %d", 
+        sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
             msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
-            *(short*)&addressPtr->addr[4], *heartBeat, currMemberNode->inited, currMemberNode->inGroup);  
+            *(short*)&addressPtr->addr[4], *heartBeat);  
         log->LOG(&memberNode->addr, s);
 #endif
 
@@ -249,12 +248,13 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
         emulNet->ENsend(&memberNode->addr, addressPtr, (char *)replyMsg, replyMsgSize);
         
         //Add peer to membership list
-        unsigned long currentTime = time(NULL);
+        unsigned long currentTime = (unsigned long) par->getcurrtime();
         MemberListEntry newPeer = MemberListEntry(getAddressId(addressPtr), getAddressPort(addressPtr), *heartBeat, currentTime);
         currMemberNode->memberList.push_back(newPeer);
+        log->logNodeAdd(&memberNode->addr, addressPtr);
         
         //Free allocated memory
-        free(addressPtr);
+        delete addressPtr;
         free(replyMsg);
     }
     else if(!this->isIntroducer && msg->msgType == JOINREP) {
@@ -278,16 +278,27 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
             msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
             *(short*)&addressPtr->addr[4], *heartBeat, currMemberNode->inited, currMemberNode->inGroup, peerMemberList.size());
         log->LOG(&memberNode->addr, s);
-        
-        //Print membership list of peer
-        for(int i = 0; i < peerMemberList.size(); i++) {
-            MemberListEntry entry = peerMemberList[i];
-            sprintf(s, "Member %d: Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", i, 
-                entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
-                *(short*)&entry.port, entry.heartbeat, entry.timestamp);
-            log->LOG(&memberNode->addr, s);
-        }
 #endif
+        
+        printMemberList(peerMemberList);
+
+        //Add peers to the membership list
+        memberNode->memberList.insert(memberNode->memberList.end(), peerMemberList.begin(), peerMemberList.end());
+        for(const MemberListEntry& entry : peerMemberList) {
+            static char s[1024];
+            sprintf(s, "%d.%d.%d.%d:%d", entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
+                *(short*)&entry.port);
+            Address* peerAddr = new Address(string(s));
+            log->logNodeAdd(&memberNode->addr, peerAddr);
+            delete peerAddr;
+        }
+        
+        //printMemberList(memberNode->memberList);
+        
+        //mark self as part of the group
+        memberNode->inGroup = true;
+        
+        delete addressPtr;
     }
     else {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
@@ -295,6 +306,10 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     
     //TODO: Who frees memory in case of receive message?
     return true;
+}
+
+void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberList) {
+    
 }
 
 /**
@@ -345,7 +360,7 @@ Address MP1Node::getJoinAddress() {
 void MP1Node::initMemberListTable(Member *memberNode) {
 	memberNode->memberList.clear();
  
-    unsigned long currentTime = time(NULL);
+    unsigned long currentTime = (unsigned long) par->getcurrtime();
     MemberListEntry self = MemberListEntry(getAddressId(&memberNode->addr), getAddressPort(&memberNode->addr), memberNode->heartbeat, currentTime);
     
     //First element in the membership list is the current node
@@ -353,15 +368,24 @@ void MP1Node::initMemberListTable(Member *memberNode) {
     memberNode->myPos = memberNode->memberList.begin();
 }
 
-/**
- * FUNCTION NAME: printAddress
- *
- * DESCRIPTION: Print the Address
- */
-void MP1Node::printAddress(Address *addr)
-{
-    printf("%d.%d.%d.%d:%d \n",  addr->addr[0],addr->addr[1],addr->addr[2],
-                                                       addr->addr[3], *(short*)&addr->addr[4]) ;    
+void MP1Node::printAddress(Address *addr) {
+    printf("%d.%d.%d.%d:%d \n",  addr->addr[0],addr->addr[1],addr->addr[2], addr->addr[3], *(short*)&addr->addr[4]) ;    
+}
+
+void MP1Node::printMemberList(const vector<MemberListEntry>& memberList) {
+#ifdef DEBUGLOG
+    static char s[1024];
+    for(int i = 0; i < memberList.size(); i++) {
+        MemberListEntry entry = memberList[i];
+        sprintf(s, "Member %d: Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", i, 
+            entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
+            *(short*)&entry.port, entry.heartbeat, entry.timestamp);
+        log->LOG(&memberNode->addr, s);
+    }
+    
+    sprintf(s, "");
+    log->LOG(&memberNode->addr, s);
+#endif
 }
 
 void* prepareJoinReqMsg(Address* addrPtr, long* heartBeat, size_t* msgSize) {

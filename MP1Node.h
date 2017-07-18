@@ -76,6 +76,9 @@ public:
 	Address getJoinAddress();
 	void initMemberListTable(Member *memberNode);
 	void printAddress(Address *addr);
+	void processPeerMemberList(const vector<MemberListEntry>& peerMemberList);
+	void printMemberList(const vector<MemberListEntry>& memberList);
+	
 	virtual ~MP1Node();
 };
 
