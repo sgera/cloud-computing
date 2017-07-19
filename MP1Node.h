@@ -80,6 +80,10 @@ public:
 	void printMemberList(const vector<MemberListEntry>& memberList);
 	
 	virtual ~MP1Node();
+	
+private:
+    void processJoinReqMsg(void *env, char *data, int size);
+    void processJoinRepMsg(void *env, char *data, int size);
 };
 
 #endif /* _MP1NODE_H_ */

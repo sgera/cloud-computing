@@ -227,78 +227,11 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     //--------------- Custom Protocol Implementation Begins --------------- 
     if(this->isIntroducer && msg->msgType == JOINREQ) {
         //JoinREQ message received by introducer, respond with JoinREP
-        
-        //Parse joinREQ message
-        Address* addressPtr = new Address();
-        memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
-        long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
-        Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
-    
-#ifdef DEBUGLOG
-        static char s[1024];
-        sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
-            msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
-            *(short*)&addressPtr->addr[4], *heartBeat);  
-        log->LOG(&memberNode->addr, s);
-#endif
-
-        //Respond with JoinREP message
-        size_t replyMsgSize = 0;
-        MessageHdr* replyMsg = (MessageHdr*)prepareJoinRepMsg(&memberNode->addr, &memberNode->heartbeat, currMemberNode->memberList, &replyMsgSize);
-        emulNet->ENsend(&memberNode->addr, addressPtr, (char *)replyMsg, replyMsgSize);
-        
-        //Add peer to membership list
-        unsigned long currentTime = (unsigned long) par->getcurrtime();
-        MemberListEntry newPeer = MemberListEntry(getAddressId(addressPtr), getAddressPort(addressPtr), *heartBeat, currentTime);
-        currMemberNode->memberList.push_back(newPeer);
-        log->logNodeAdd(&memberNode->addr, addressPtr);
-        
-        //Free allocated memory
-        delete addressPtr;
-        free(replyMsg);
+        processJoinReqMsg(env, data, size);        
     }
     else if(!this->isIntroducer && msg->msgType == JOINREP) {
-        
-        //Parse joinREP message
-        Address* addressPtr = new Address();
-        memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
-        long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
-        int* memberListSize = (int *)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long)); 
-        
-        vector<MemberListEntry> peerMemberList;
-        peerMemberList.resize(*memberListSize);
-        char* memberListBuffer = (char*)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long) + sizeof(int));
-        copy(memberListBuffer, memberListBuffer + (*memberListSize) * sizeof(MemberListEntry), reinterpret_cast<char *>(peerMemberList.data()));
- 
-        Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
-    
-#ifdef DEBUGLOG
-        static char s[1024];
-        sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tInited: %d\tInGroup: %d\tPeerListSize: %d", 
-            msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
-            *(short*)&addressPtr->addr[4], *heartBeat, currMemberNode->inited, currMemberNode->inGroup, peerMemberList.size());
-        log->LOG(&memberNode->addr, s);
-#endif
-        
-        printMemberList(peerMemberList);
-
-        //Add peers to the membership list
-        memberNode->memberList.insert(memberNode->memberList.end(), peerMemberList.begin(), peerMemberList.end());
-        for(const MemberListEntry& entry : peerMemberList) {
-            static char s[1024];
-            sprintf(s, "%d.%d.%d.%d:%d", entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
-                *(short*)&entry.port);
-            Address* peerAddr = new Address(string(s));
-            log->logNodeAdd(&memberNode->addr, peerAddr);
-            delete peerAddr;
-        }
-        
-        //printMemberList(memberNode->memberList);
-        
-        //mark self as part of the group
-        memberNode->inGroup = true;
-        
-        delete addressPtr;
+        //JoinREP message received by peer, update memberlist
+        processJoinRepMsg(env, data, size);
     }
     else {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
@@ -306,6 +239,85 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     
     //TODO: Who frees memory in case of receive message?
     return true;
+}
+
+void MP1Node::processJoinReqMsg(void *env, char *data, int size) {
+    //Parse joinREQ message (Boiler-Plate)
+    MessageHdr *msg = (MessageHdr*) data;
+    MsgTypes msgType = msg->msgType;
+    Address* addressPtr = new Address();
+    memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
+    long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
+    Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
+    
+#ifdef DEBUGLOG
+    static char s[1024];
+    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
+        msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
+        *(short*)&addressPtr->addr[4], *heartBeat);  
+    log->LOG(&memberNode->addr, s);
+#endif
+
+    //Respond with JoinREP message
+    size_t replyMsgSize = 0;
+    MessageHdr* replyMsg = (MessageHdr*)prepareJoinRepMsg(&memberNode->addr, &memberNode->heartbeat, currMemberNode->memberList, &replyMsgSize);
+    emulNet->ENsend(&memberNode->addr, addressPtr, (char *)replyMsg, replyMsgSize);
+    
+    //Add peer to membership list
+    unsigned long currentTime = (unsigned long) par->getcurrtime();
+    MemberListEntry newPeer = MemberListEntry(getAddressId(addressPtr), getAddressPort(addressPtr), *heartBeat, currentTime);
+    currMemberNode->memberList.push_back(newPeer);
+    log->logNodeAdd(&memberNode->addr, addressPtr);
+    
+    //Free allocated memory
+    delete addressPtr;
+    free(replyMsg);
+}
+
+void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
+    //Parse joinREP message
+    MessageHdr *msg = (MessageHdr*) data;
+    MsgTypes msgType = msg->msgType;
+    Address* addressPtr = new Address();
+    memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
+    long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
+    int* memberListSize = (int *)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long)); 
+            
+    vector<MemberListEntry> peerMemberList;
+    peerMemberList.resize(*memberListSize);
+    char* memberListBuffer = (char*)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long) + sizeof(int));
+    copy(memberListBuffer, memberListBuffer + (*memberListSize) * sizeof(MemberListEntry), reinterpret_cast<char *>(peerMemberList.data()));
+     
+    Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
+    
+#ifdef DEBUGLOG
+    static char s[1024];
+    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
+        msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
+        *(short*)&addressPtr->addr[4], *heartBeat, peerMemberList.size());
+    log->LOG(&memberNode->addr, s);
+#endif
+        
+    //printMemberList(peerMemberList);
+
+    //Add peers to the membership list
+    memberNode->memberList.insert(memberNode->memberList.end(), peerMemberList.begin(), peerMemberList.end());
+    for(const MemberListEntry& entry : peerMemberList) {
+        static char s[1024];
+        sprintf(s, "%d.%d.%d.%d:%d", entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
+            *(short*)&entry.port);
+        Address* peerAddr = new Address(string(s));
+        log->logNodeAdd(&memberNode->addr, peerAddr);
+        delete peerAddr;
+    }
+        
+    printMemberList(memberNode->memberList);
+    
+    //mark self as part of the group
+    memberNode->inGroup = true;
+    
+    //Cleanup
+    delete addressPtr;
 }
 
 void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberList) {
