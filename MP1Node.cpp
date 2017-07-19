@@ -1,4 +1,4 @@
-/**********************************
+/**e********************************
  * FILE NAME: MP1Node.cpp
  *
  * DESCRIPTION: Membership protocol run by this Node.
@@ -233,6 +233,9 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
         //JoinREP message received by peer, update memberlist
         processJoinRepMsg(env, data, size);
     }
+    else if(msg->msgType == HEARTBEAT) {
+        processHeartbeatMsg(env, data, size);
+    }
     else {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
     }
@@ -320,6 +323,12 @@ void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
     delete addressPtr;
 }
 
+void MP1Node::processHeartbeatMsg(void *env, char *data, int size) {
+    //Compare currentTime/timestamp with Tfail
+    //    update membership list (processPeerMemberList)
+    //    Or, ignore
+}
+
 void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberList) {
     
 }
@@ -329,15 +338,45 @@ void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberLis
  *
  * DESCRIPTION: Check if any node hasn't responded within a timeout period and then delete
  * 				the nodes
- * 				Propagate your membership list
+ * 				Propagate your membership list (heartbeat)
  */
 void MP1Node::nodeLoopOps() {
-
-	/*
-	 * Your code goes here
-	 */
+    
+    //Cleanup members which have not responded since TREMOVE
+    removeStaleMembers();
+    
+//
+//        update own heartbeat in membership list
+//        select b random nodes from membership list
+//        send hearbeat
+//                Filter out failed members (Tfail comparison here)
 
     return;
+}
+
+void MP1Node::removeStaleMembers() {
+    static char s[1024];
+    unsigned long currentTime = (unsigned long) this->par->getcurrtime();
+    
+    vector<MemberListEntry>::iterator it = memberNode->memberList.begin();
+    for ( ; it != memberNode->memberList.end(); ) {
+        
+        if ((currentTime - (unsigned long)it->timestamp) >= (unsigned long)TREMOVE) {
+            sprintf(s, "%d.%d.%d.%d:%d", it->id & 0xFF, (it->id >> 8) & 0xFF, (it->id >> 16) & 0xFF, (it->id >> 24) & 0xFF, 
+                *(short*)&it->port);
+            string peerAddressStr = string(s);
+            Address peerAddr(peerAddressStr);
+            
+#ifdef DEBUGLOG2
+            sprintf(s, ("Member Removed - Address: " + peerAddressStr + "\tHeartbeat: %ld\tTimestamp: %ld" + ", CurrentTimestamp: " + to_string(currentTime)).c_str(), it->heartbeat, it->timestamp);
+            log->LOG(&memberNode->addr, s);
+#endif    
+
+            log->logNodeRemove(&memberNode->addr, &peerAddr);
+            it = memberNode->memberList.erase(it);
+        } 
+        else { ++it; }
+    }
 }
 
 /**
@@ -389,12 +428,27 @@ void MP1Node::printMemberList(const vector<MemberListEntry>& memberList) {
     static char s[1024];
     for(int i = 0; i < memberList.size(); i++) {
         MemberListEntry entry = memberList[i];
-        sprintf(s, "Member %d: Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", i, 
+        sprintf(s, "MemberList %d: Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", i, 
             entry.id & 0xFF, (entry.id >> 8) & 0xFF, (entry.id >> 16) & 0xFF, (entry.id >> 24) & 0xFF, 
             *(short*)&entry.port, entry.heartbeat, entry.timestamp);
         log->LOG(&memberNode->addr, s);
     }
     
+    sprintf(s, "");
+    log->LOG(&memberNode->addr, s);
+#endif
+}
+
+void MP1Node::printMemberList(vector<MemberListEntry>::const_iterator begin, vector<MemberListEntry>::const_iterator end) {
+#ifdef DEBUGLOG
+    static char s[1024];
+    while(begin != end) {
+        sprintf(s, "MemberList Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", 
+            begin->id & 0xFF, (begin->id >> 8) & 0xFF, (begin->id >> 16) & 0xFF, (begin->id >> 24) & 0xFF, 
+            *(short*)&begin->port, begin->heartbeat, begin->timestamp);
+        log->LOG(&memberNode->addr, s);
+        begin++;
+    }    
     sprintf(s, "");
     log->LOG(&memberNode->addr, s);
 #endif

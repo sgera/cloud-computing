@@ -31,6 +31,7 @@
 enum MsgTypes{
     JOINREQ,
     JOINREP,
+    HEARTBEAT,
     DUMMYLASTMSGTYPE
 };
 
@@ -77,13 +78,17 @@ public:
 	void initMemberListTable(Member *memberNode);
 	void printAddress(Address *addr);
 	void processPeerMemberList(const vector<MemberListEntry>& peerMemberList);
-	void printMemberList(const vector<MemberListEntry>& memberList);
 	
 	virtual ~MP1Node();
 	
 private:
     void processJoinReqMsg(void *env, char *data, int size);
     void processJoinRepMsg(void *env, char *data, int size);
+    void processHeartbeatMsg(void *env, char *data, int size);
+    void removeStaleMembers();
+    
+    void printMemberList(const vector<MemberListEntry>& memberList);
+	void printMemberList(vector<MemberListEntry>::const_iterator begin, vector<MemberListEntry>::const_iterator end);
 };
 
 #endif /* _MP1NODE_H_ */
