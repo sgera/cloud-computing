@@ -19,8 +19,8 @@
  * Macros
  */
 #define TREMOVE 20
-#define TFAIL 5
-#define GOSSIP_FANOUT 1
+#define TFAIL 10
+#define GOSSIP_FANOUT 3
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
@@ -90,6 +90,7 @@ private:
     void updateOwnHeartbeat();
     void* prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize);
     void* prepareJoinRepMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize);
+    bool isNodePresentInList(const MemberListEntry& node);
     
     vector<MemberListEntry> selectFanoutRandomPeers();
     void printMemberList(const vector<MemberListEntry>& memberList);

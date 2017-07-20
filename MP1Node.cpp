@@ -267,11 +267,13 @@ void MP1Node::processJoinReqMsg(void *env, char *data, int size) {
     MessageHdr* replyMsg = (MessageHdr*)prepareJoinRepMsg(&memberNode->addr, &memberNode->heartbeat, currMemberNode->memberList, &replyMsgSize);
     emulNet->ENsend(&memberNode->addr, addressPtr, (char *)replyMsg, replyMsgSize);
     
-    //Add peer to membership list
+    //Add peer to membership list (if not already present)
     unsigned long currentTime = (unsigned long) par->getcurrtime();
     MemberListEntry newPeer = MemberListEntry(getAddressId(addressPtr), getAddressPort(addressPtr), *heartBeat, currentTime);
-    currMemberNode->memberList.push_back(newPeer);
-    log->logNodeAdd(&memberNode->addr, addressPtr);
+    if(isNodePresentInList(newPeer)) {
+        currMemberNode->memberList.push_back(newPeer);
+        log->logNodeAdd(&memberNode->addr, addressPtr);
+    }
     
     printMemberList(memberNode->memberList);
     
@@ -344,16 +346,17 @@ void MP1Node::processHeartbeatMsg(void *env, char *data, int size) {
     
 #ifdef DEBUGLOG2
     static char s[1024];
-    sprintf(s, "Heartbeat received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
+    sprintf(s, "Heartbeat received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d, Following is the peerlist received", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
         *(short*)&addressPtr->addr[4], *heartBeat, peerMemberList.size());
     log->LOG(&memberNode->addr, s);
+    printMemberList(peerMemberList);
 #endif
         
     //Update membership list based on peer's list
     processPeerMemberList(peerMemberList);
         
-    printMemberList(memberNode->memberList);
+    //printMemberList(memberNode->memberList);
     
     //Cleanup
     delete addressPtr;
@@ -374,12 +377,15 @@ void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberLis
     //For each member in peer membership list
     for(const MemberListEntry& node : peerMemberList) {
         
-        vector<MemberListEntry>::iterator peerItr = find_if(memberNode->memberList.begin(), memberNode->memberList.end(), [&node](MemberListEntry& entry) {
-                return node.id == entry.id && node.port == entry.port;
-        });
+        int index = 0;
+        for(;index < memberNode->memberList.size(); index++) {
+            if(node.id == memberNode->memberList[index].id && node.port == memberNode->memberList[index].port) {
+                break;
+            }
+        }
         
         //Check if that member is present in own list
-        if(peerItr == memberNode->memberList.end()) {
+        if(index == memberNode->memberList.size()) {
             
             //If not present, insert the entry in local list
             memberNode->memberList.push_back(node);
@@ -391,18 +397,28 @@ void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberLis
         else {
             
             //If yes, check if the received heartbeat is more than local heartbeat
-            if((unsigned long)node.heartbeat > (unsigned long)peerItr->heartbeat) {
+            if((unsigned long)node.heartbeat > (unsigned long)memberNode->memberList[index].heartbeat) {
              
                 //Check if current time and local peer time <= TFail (entry has not yet failed)
-                if ((currentTime - (unsigned long)peerItr->timestamp) <= (unsigned long)TFAIL) {
+                if ((currentTime - (unsigned long)memberNode->memberList[index].timestamp) < (unsigned long)TFAIL) {
                     
                     //Update that member with received heartbeat and current local time
-                    peerItr->timestamp = currentTime;
-                    peerItr->heartbeat = node.heartbeat;
+                    memberNode->memberList[index].timestamp = currentTime;
+                    memberNode->memberList[index].heartbeat = node.heartbeat;
                 }
             }
         }
     }
+}
+
+bool MP1Node::isNodePresentInList(const MemberListEntry& node) {
+    int index = 0;
+    for(;index < memberNode->memberList.size(); index++) {
+        if(node.id == memberNode->memberList[index].id && node.port == memberNode->memberList[index].port) {
+            break;
+        }
+    }
+    return index != memberNode->memberList.size();
 }
 
 /**
@@ -565,7 +581,7 @@ void MP1Node::printAddress(Address *addr) {
 }
 
 void MP1Node::printMemberList(const vector<MemberListEntry>& memberList) {
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
     static char s[1024];
     for(int i = 0; i < memberList.size(); i++) {
         MemberListEntry entry = memberList[i];
@@ -581,7 +597,7 @@ void MP1Node::printMemberList(const vector<MemberListEntry>& memberList) {
 }
 
 void MP1Node::printMemberList(vector<MemberListEntry>::const_iterator begin, vector<MemberListEntry>::const_iterator end) {
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
     static char s[1024];
     while(begin != end) {
         sprintf(s, "MemberList Address: %d.%d.%d.%d:%d\tHeartbeat: %ld\tTimestamp: %ld", 
@@ -596,7 +612,15 @@ void MP1Node::printMemberList(vector<MemberListEntry>::const_iterator begin, vec
 }
 
 void* MP1Node::prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize) {
-    int memberListSize = memberList.size() * sizeof(MemberListEntry);
+    vector<MemberListEntry> copyList(memberList);
+    unsigned long currentTime = (unsigned long) par->getcurrtime();
+    
+    //Remove nodes with TFAILed
+    copyList.erase(remove_if(copyList.begin(), copyList.end(), [&currentTime](MemberListEntry& entry) {
+        return (unsigned long)currentTime - (unsigned long)entry.timestamp >= TFAIL;
+    }), copyList.end());
+    
+    int memberListSize = copyList.size() * sizeof(MemberListEntry);
     *msgSize = sizeof(MessageHdr) + sizeof(*addrPtr) + sizeof(long) + memberListSize + sizeof(int) + 1;
     int size = *msgSize;
     
@@ -607,10 +631,10 @@ void* MP1Node::prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<Mem
     memcpy((char *)(msg+1), &addrPtr->addr, sizeof(addrPtr->addr));
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr), heartBeat, sizeof(long));
     
-    int memberListCount = memberList.size();
+    int memberListCount = copyList.size();
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long), &memberListCount, sizeof(int));
-    copy( reinterpret_cast<char *>(memberList.data()), reinterpret_cast<char *>(memberList.data()) + memberListSize, (char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long) + sizeof(int));          
-
+    copy( reinterpret_cast<char *>(copyList.data()), reinterpret_cast<char *>(copyList.data()) + memberListSize, (char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long) + sizeof(int));          
+    
     return (void*)msg;
 }
 

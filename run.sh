@@ -20,10 +20,10 @@ make clean > /dev/null
 make > /dev/null
 ./Application testcases/singlefailure.conf > /projects/mp1/singlefailure.txt
 cp dbg.log ../../dbg.0.log
-#./Application testcases/multifailure.conf > /dev/null
-#cp dbg.log ../../dbg.1.log
-#./Application testcases/msgdropsinglefailure.conf > /dev/null
-#cp dbg.log ../../dbg.2.log
+./Application testcases/multifailure.conf > /dev/null
+cp dbg.log ../../dbg.1.log
+./Application testcases/msgdropsinglefailure.conf > /dev/null
+cp dbg.log ../../dbg.2.log
 cd ../..
-rm -rf grade-dir
+#rm -rf grade-dir
 
