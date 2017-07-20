@@ -1,4 +1,4 @@
-/**e********************************
+ /**e********************************
  * FILE NAME: MP1Node.cpp
  *
  * DESCRIPTION: Membership protocol run by this Node.
@@ -240,7 +240,8 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
     }
     
-    //TODO: Who frees memory in case of receive message?
+    //Free memory after processing the received message
+    free(data); 
     return true;
 }
 
@@ -341,17 +342,44 @@ void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberLis
  * 				Propagate your membership list (heartbeat)
  */
 void MP1Node::nodeLoopOps() {
+    //update own heartbeat in membership list
+    updateOwnHeartbeat();
     
     //Cleanup members which have not responded since TREMOVE
     removeStaleMembers();
     
-//
-//        update own heartbeat in membership list
-//        select b random nodes from membership list
+    //select b random valid nodes from membership list (other than self)
+    vector<MemberListEntry> randomNodes = selectFanoutRandomPeers();
+    
+    
 //        send hearbeat
 //                Filter out failed members (Tfail comparison here)
 
     return;
+}
+
+//TODO Do not include nodes which have crossed TFail
+vector<MemberListEntry> MP1Node::selectFanoutRandomPeers() {
+    vector<MemberListEntry> randomNodes;
+    
+    int i = GOSSIP_FANOUT;
+    while(i-- && memberNode->memberList.size() > 1) {                   //Check if peer exists
+        int index = rand() % (memberNode->memberList.size()-1) + 1;     //Random number between 1 and N-1
+        const MemberListEntry& selectedNode = memberNode->memberList[index];
+        randomNodes.push_back(selectedNode);
+        
+#ifdef DEBUGLOG2
+        static char s[1024];
+        sprintf(s, "%d.%d.%d.%d:%d", selectedNode.id & 0xFF, (selectedNode.id >> 8) & 0xFF, (selectedNode.id >> 16) & 0xFF, (selectedNode.id >> 24) & 0xFF, 
+            *(short*)&selectedNode.port);
+        string peerAddressStr(s);
+        sprintf(s, ("Fanout Random Member - Address: " + peerAddressStr + "\tHeartbeat: %ld\tTimestamp: %ld").c_str(), selectedNode.heartbeat, selectedNode.timestamp);
+        log->LOG(&memberNode->addr, s);
+#endif            
+
+    }
+    
+    return randomNodes;
 }
 
 void MP1Node::removeStaleMembers() {
@@ -359,6 +387,7 @@ void MP1Node::removeStaleMembers() {
     unsigned long currentTime = (unsigned long) this->par->getcurrtime();
     
     vector<MemberListEntry>::iterator it = memberNode->memberList.begin();
+    //it++;
     for ( ; it != memberNode->memberList.end(); ) {
         
         if ((currentTime - (unsigned long)it->timestamp) >= (unsigned long)TREMOVE) {
@@ -367,8 +396,8 @@ void MP1Node::removeStaleMembers() {
             string peerAddressStr = string(s);
             Address peerAddr(peerAddressStr);
             
-#ifdef DEBUGLOG2
-            sprintf(s, ("Member Removed - Address: " + peerAddressStr + "\tHeartbeat: %ld\tTimestamp: %ld" + ", CurrentTimestamp: " + to_string(currentTime)).c_str(), it->heartbeat, it->timestamp);
+#ifdef DEBUGLOG
+            sprintf(s, ("Member Removed - Address: " + peerAddressStr + "\tHeartbeat: %ld\tTimestamp: %ld").c_str(), it->heartbeat, it->timestamp);
             log->LOG(&memberNode->addr, s);
 #endif    
 
@@ -377,6 +406,12 @@ void MP1Node::removeStaleMembers() {
         } 
         else { ++it; }
     }
+}
+
+void MP1Node::updateOwnHeartbeat() {
+    memberNode->heartbeat++;
+    memberNode->myPos->heartbeat++;
+    memberNode->myPos->settimestamp(par->getcurrtime());
 }
 
 /**

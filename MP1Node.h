@@ -20,6 +20,7 @@
  */
 #define TREMOVE 20
 #define TFAIL 5
+#define GOSSIP_FANOUT 2
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
@@ -86,7 +87,8 @@ private:
     void processJoinRepMsg(void *env, char *data, int size);
     void processHeartbeatMsg(void *env, char *data, int size);
     void removeStaleMembers();
-    
+    void updateOwnHeartbeat();
+    vector<MemberListEntry> selectFanoutRandomPeers();
     void printMemberList(const vector<MemberListEntry>& memberList);
 	void printMemberList(vector<MemberListEntry>::const_iterator begin, vector<MemberListEntry>::const_iterator end);
 };
