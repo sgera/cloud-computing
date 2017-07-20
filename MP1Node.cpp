@@ -1,4 +1,4 @@
- /**e********************************
+/**********************************
  * FILE NAME: MP1Node.cpp
  *
  * DESCRIPTION: Membership protocol run by this Node.
@@ -209,6 +209,7 @@ void MP1Node::checkMessages() {
     	size = memberNode->mp1q.front().size;
     	memberNode->mp1q.pop();
     	recvCallBack((void *)memberNode, (char *)ptr, size);
+    	free(ptr);
     }
     return;
 }
@@ -234,14 +235,15 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
         processJoinRepMsg(env, data, size);
     }
     else if(msg->msgType == HEARTBEAT) {
-        processHeartbeatMsg(env, data, size);
+        log->LOG(&memberNode->addr, "Hearbeat message received!");
+        //processHeartbeatMsg(env, data, size);
     }
     else {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
     }
     
     //Free memory after processing the received message
-    free(data); 
+    //free(data); 
     return true;
 }
 
@@ -254,7 +256,7 @@ void MP1Node::processJoinReqMsg(void *env, char *data, int size) {
     long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
     Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
     
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
     static char s[1024];
     sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
@@ -294,7 +296,7 @@ void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
      
     Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
     
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
     static char s[1024];
     sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
@@ -325,13 +327,82 @@ void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
 }
 
 void MP1Node::processHeartbeatMsg(void *env, char *data, int size) {
-    //Compare currentTime/timestamp with Tfail
-    //    update membership list (processPeerMemberList)
-    //    Or, ignore
+    //Parse HEARTBEAT message
+    MessageHdr *msg = (MessageHdr*) data;
+    MsgTypes msgType = msg->msgType;
+    Address* addressPtr = new Address();
+    memcpy(addressPtr->addr, (char*)(msg + 1), sizeof(Address));
+    long* heartBeat = (long *)((char *)(msg+1) + 1 + sizeof(Address));
+    int* memberListSize = (int *)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long)); 
+            
+    vector<MemberListEntry> peerMemberList;
+    peerMemberList.resize(*memberListSize);
+    char* memberListBuffer = (char*)((char *)(msg+1) + 1 + sizeof(Address) + sizeof(long) + sizeof(int));
+    copy(memberListBuffer, memberListBuffer + (*memberListSize) * sizeof(MemberListEntry), reinterpret_cast<char *>(peerMemberList.data()));
+     
+    Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
+    
+#ifdef DEBUGLOG
+    static char s[1024];
+    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
+        msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
+        *(short*)&addressPtr->addr[4], *heartBeat, peerMemberList.size());
+    log->LOG(&memberNode->addr, s);
+#endif
+        
+    //Update membership list based on peer's list
+    processPeerMemberList(peerMemberList);
+        
+    printMemberList(memberNode->memberList);
+    
+    //Cleanup
+    delete addressPtr;
 }
 
 void MP1Node::processPeerMemberList(const vector<MemberListEntry>& peerMemberList) {
+//Gossip Implementation
+//    for each member in peer membership list
+//				Check if that member is present in own list
+//					If yes, check if the received heartbeat is more than local heartbeat
+//						Check if current time and local peer time <= TFail
+//							Update that member with received heartbeat and current local time
+//					If not present, insert the entry in local list
+//					
+    static char s[1024];
+    unsigned long currentTime = (unsigned long) this->par->getcurrtime();
     
+    //For each member in peer membership list
+    for(const MemberListEntry& node : peerMemberList) {
+        
+        vector<MemberListEntry>::iterator peerItr = find_if(memberNode->memberList.begin(), memberNode->memberList.end(), [&node](MemberListEntry& entry) {
+                return node.id == entry.id && node.port == entry.port;
+        });
+        
+        //Check if that member is present in own list
+        if(peerItr == memberNode->memberList.end()) {
+            
+            //If not present, insert the entry in local list
+            memberNode->memberList.push_back(node);
+            sprintf(s, "%d.%d.%d.%d:%d", node.id & 0xFF, (node.id >> 8) & 0xFF, (node.id >> 16) & 0xFF, (node.id >> 24) & 0xFF, *(short*)&node.port);
+            Address* peerAddr = new Address(string(s));
+            log->logNodeAdd(&memberNode->addr, peerAddr);
+            delete peerAddr;
+        }
+        else {
+            
+            //If yes, check if the received heartbeat is more than local heartbeat
+            if((unsigned long)node.heartbeat > (unsigned long)peerItr->heartbeat) {
+             
+                //Check if current time and local peer time <= TFail (entry has not yet failed)
+                if ((currentTime - (unsigned long)peerItr->timestamp) <= (unsigned long)TFAIL) {
+                    
+                    //Update that member with received heartbeat and current local time
+                    peerItr->timestamp = currentTime;
+                    peerItr->heartbeat = node.heartbeat;
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -348,25 +419,50 @@ void MP1Node::nodeLoopOps() {
     //Cleanup members which have not responded since TREMOVE
     removeStaleMembers();
     
-    //select b random valid nodes from membership list (other than self)
+    //select b random valid nodes from membership list (other than self and failed members - TFAIL comparison)
     vector<MemberListEntry> randomNodes = selectFanoutRandomPeers();
     
+    //send hearbeat
+    for(const MemberListEntry& peer : randomNodes) {
+        log->LOG(&memberNode->addr, "Hearbeat send 1");
+        size_t replyMsgSize = 0;
+        MessageHdr* replyMsg = (MessageHdr*)prepareHeartbeatMsg(&memberNode->addr, &memberNode->heartbeat, memberNode->memberList, &replyMsgSize);
+        
+        log->LOG(&memberNode->addr, "Hearbeat send 2");
+        static char s[1024];
+        sprintf(s, "%d.%d.%d.%d:%d", peer.id & 0xFF, (peer.id >> 8) & 0xFF, (peer.id >> 16) & 0xFF, (peer.id >> 24) & 0xFF, *(short*)&peer.port);
+        string peerAddressStr = string(s);
+        Address peerAddr(peerAddressStr);
+            
+        log->LOG(&memberNode->addr, "Hearbeat send 3");
+        emulNet->ENsend(&memberNode->addr, &peerAddr, (char *)replyMsg, replyMsgSize);    
+        
+        log->LOG(&memberNode->addr, "Hearbeat send 4");
+        
+        //Free allocated memory
+        free(replyMsg);
+        
+        log->LOG(&memberNode->addr, "Hearbeat send 5");
+    }
     
-//        send hearbeat
-//                Filter out failed members (Tfail comparison here)
-
     return;
 }
 
-//TODO Do not include nodes which have crossed TFail
 vector<MemberListEntry> MP1Node::selectFanoutRandomPeers() {
     vector<MemberListEntry> randomNodes;
     
-    int i = GOSSIP_FANOUT;
-    while(i-- && memberNode->memberList.size() > 1) {                   //Check if peer exists
+    int i = 2 * GOSSIP_FANOUT;
+    unsigned long currentTime = (unsigned long) this->par->getcurrtime();
+    
+    while(i-- && memberNode->memberList.size() > 1 && randomNodes.size() < GOSSIP_FANOUT) {                   //Check if peer exists
         int index = rand() % (memberNode->memberList.size()-1) + 1;     //Random number between 1 and N-1
         const MemberListEntry& selectedNode = memberNode->memberList[index];
-        randomNodes.push_back(selectedNode);
+        
+        //Do not include nodes which have crossed TFail
+        if (((unsigned long)currentTime - (unsigned long)selectedNode.timestamp) < (unsigned long)TFAIL) {
+            randomNodes.push_back(selectedNode);
+        }
+
         
 #ifdef DEBUGLOG2
         static char s[1024];
@@ -387,10 +483,9 @@ void MP1Node::removeStaleMembers() {
     unsigned long currentTime = (unsigned long) this->par->getcurrtime();
     
     vector<MemberListEntry>::iterator it = memberNode->memberList.begin();
-    //it++;
     for ( ; it != memberNode->memberList.end(); ) {
         
-        if ((currentTime - (unsigned long)it->timestamp) >= (unsigned long)TREMOVE) {
+        if (((unsigned long)currentTime - (unsigned long)it->timestamp) >= (unsigned long)TREMOVE) {
             sprintf(s, "%d.%d.%d.%d:%d", it->id & 0xFF, (it->id >> 8) & 0xFF, (it->id >> 16) & 0xFF, (it->id >> 24) & 0xFF, 
                 *(short*)&it->port);
             string peerAddressStr = string(s);
@@ -409,9 +504,16 @@ void MP1Node::removeStaleMembers() {
 }
 
 void MP1Node::updateOwnHeartbeat() {
-    memberNode->heartbeat++;
-    memberNode->myPos->heartbeat++;
+    memberNode->heartbeat = memberNode->heartbeat+1;
+    memberNode->myPos->heartbeat = memberNode->myPos->heartbeat+1;
+    memberNode->myPos->setheartbeat(memberNode->myPos->heartbeat+1);
     memberNode->myPos->settimestamp(par->getcurrtime());
+    
+    #ifdef DEBUGLOG2
+        static char s[1024];
+        sprintf(s, "Hearbeat update\tHeartbeat: %ld\tTimestamp: %ld", memberNode->heartbeat, memberNode->myPos->timestamp);
+        log->LOG(&memberNode->addr, s);
+    #endif   
 }
 
 /**
@@ -489,11 +591,36 @@ void MP1Node::printMemberList(vector<MemberListEntry>::const_iterator begin, vec
 #endif
 }
 
+void* MP1Node::prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize) {
+    int memberListSize = memberList.size() * sizeof(MemberListEntry);
+    *msgSize = sizeof(MessageHdr) + sizeof(*addrPtr) + sizeof(long) + memberListSize + sizeof(int) + 1;
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 1\tsize: %d", *msgSize);
+    int size = *msgSize;
+    
+    MessageHdr* msg = (MessageHdr *) malloc((size) * sizeof(char));
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 2");
+    
+    // create HEARTBEAT message
+    msg->msgType = HEARTBEAT;
+    memcpy((char *)(msg+1), &addrPtr->addr, sizeof(addrPtr->addr));
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 3");
+    memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr), heartBeat, sizeof(long));
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 4");
+    
+    int memberListCount = memberList.size();
+    memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long), &memberListCount, sizeof(int));
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 5");
+    
+    copy( reinterpret_cast<char *>(memberList.data()), reinterpret_cast<char *>(memberList.data()) + memberListSize, (char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long) + sizeof(int));          
+    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 6");
+    return (void*)msg;
+}
+
 void* prepareJoinReqMsg(Address* addrPtr, long* heartBeat, size_t* msgSize) {
     *msgSize = sizeof(MessageHdr) + sizeof(*addrPtr) + sizeof(long) + 1;
     MessageHdr* msg = (MessageHdr *) malloc((*msgSize) * sizeof(char));
 
-    // create JOINREQ message: format of data is {struct Address myaddr}
+    // create JOINREQ message
     msg->msgType = JOINREQ;
     memcpy((char *)(msg+1), &addrPtr->addr, sizeof(addrPtr->addr));
     memcpy((char *)(msg+1) + 1 + sizeof(addrPtr->addr), heartBeat, sizeof(long));

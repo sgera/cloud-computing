@@ -88,6 +88,8 @@ private:
     void processHeartbeatMsg(void *env, char *data, int size);
     void removeStaleMembers();
     void updateOwnHeartbeat();
+    void* prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize);
+    
     vector<MemberListEntry> selectFanoutRandomPeers();
     void printMemberList(const vector<MemberListEntry>& memberList);
 	void printMemberList(vector<MemberListEntry>::const_iterator begin, vector<MemberListEntry>::const_iterator end);
