@@ -9,7 +9,6 @@
 
 //Forward Decl
 void* prepareJoinReqMsg(Address* addrPtr, long* heartBeat, size_t* msgSize);
-void* prepareJoinRepMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize);
 int getAddressId(Address* addr);
 short getAddressPort(Address* addr);
 
@@ -209,7 +208,8 @@ void MP1Node::checkMessages() {
     	size = memberNode->mp1q.front().size;
     	memberNode->mp1q.pop();
     	recvCallBack((void *)memberNode, (char *)ptr, size);
-    	free(ptr);
+    	//Free memory after processing the received message
+    	free(ptr);     
     }
     return;
 }
@@ -235,15 +235,13 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
         processJoinRepMsg(env, data, size);
     }
     else if(msg->msgType == HEARTBEAT) {
-        log->LOG(&memberNode->addr, "Hearbeat message received!");
-        //processHeartbeatMsg(env, data, size);
+        //HEARTBEAT message received, update memberList
+        processHeartbeatMsg(env, data, size);
     }
     else {
         log->LOG(&memberNode->addr, "Illegal State: Unexpected messages received!");
     }
     
-    //Free memory after processing the received message
-    //free(data); 
     return true;
 }
 
@@ -258,7 +256,7 @@ void MP1Node::processJoinReqMsg(void *env, char *data, int size) {
     
 #ifdef DEBUGLOG2
     static char s[1024];
-    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
+    sprintf(s, "JoinReq Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
         *(short*)&addressPtr->addr[4], *heartBeat);  
     log->LOG(&memberNode->addr, s);
@@ -274,6 +272,8 @@ void MP1Node::processJoinReqMsg(void *env, char *data, int size) {
     MemberListEntry newPeer = MemberListEntry(getAddressId(addressPtr), getAddressPort(addressPtr), *heartBeat, currentTime);
     currMemberNode->memberList.push_back(newPeer);
     log->logNodeAdd(&memberNode->addr, addressPtr);
+    
+    printMemberList(memberNode->memberList);
     
     //Free allocated memory
     delete addressPtr;
@@ -298,7 +298,7 @@ void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
     
 #ifdef DEBUGLOG2
     static char s[1024];
-    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
+    sprintf(s, "JoinRep Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
         *(short*)&addressPtr->addr[4], *heartBeat, peerMemberList.size());
     log->LOG(&memberNode->addr, s);
@@ -317,7 +317,7 @@ void MP1Node::processJoinRepMsg(void *env, char *data, int size) {
         delete peerAddr;
     }
         
-    printMemberList(memberNode->memberList);
+    //printMemberList(memberNode->memberList);
     
     //mark self as part of the group
     memberNode->inGroup = true;
@@ -342,9 +342,9 @@ void MP1Node::processHeartbeatMsg(void *env, char *data, int size) {
      
     Member* currMemberNode = (Member*)env;                                  //Equal to "memberNode"
     
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
     static char s[1024];
-    sprintf(s, "Message received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
+    sprintf(s, "Heartbeat received\t Type: %d\tFrom: %d.%d.%d.%d:%d\tHeartbeat: %ld\tPeerListSize: %d", 
         msg->msgType, addressPtr->addr[0],addressPtr->addr[1],addressPtr->addr[2], addressPtr->addr[3], 
         *(short*)&addressPtr->addr[4], *heartBeat, peerMemberList.size());
     log->LOG(&memberNode->addr, s);
@@ -424,25 +424,24 @@ void MP1Node::nodeLoopOps() {
     
     //send hearbeat
     for(const MemberListEntry& peer : randomNodes) {
-        log->LOG(&memberNode->addr, "Hearbeat send 1");
         size_t replyMsgSize = 0;
         MessageHdr* replyMsg = (MessageHdr*)prepareHeartbeatMsg(&memberNode->addr, &memberNode->heartbeat, memberNode->memberList, &replyMsgSize);
         
-        log->LOG(&memberNode->addr, "Hearbeat send 2");
         static char s[1024];
         sprintf(s, "%d.%d.%d.%d:%d", peer.id & 0xFF, (peer.id >> 8) & 0xFF, (peer.id >> 16) & 0xFF, (peer.id >> 24) & 0xFF, *(short*)&peer.port);
         string peerAddressStr = string(s);
         Address peerAddr(peerAddressStr);
-            
-        log->LOG(&memberNode->addr, "Hearbeat send 3");
+
+#ifdef DEBUGLOG2
+        sprintf(s, ("Sending Hearbeat to Address: " + peerAddressStr + "Size: %d\tMyHeartbeat: %d").c_str(), replyMsgSize, memberNode->heartbeat);
+        log->LOG(&memberNode->addr, s);
+        printMemberList(memberNode->memberList);
+#endif    
+
         emulNet->ENsend(&memberNode->addr, &peerAddr, (char *)replyMsg, replyMsgSize);    
-        
-        log->LOG(&memberNode->addr, "Hearbeat send 4");
         
         //Free allocated memory
         free(replyMsg);
-        
-        log->LOG(&memberNode->addr, "Hearbeat send 5");
     }
     
     return;
@@ -483,6 +482,7 @@ void MP1Node::removeStaleMembers() {
     unsigned long currentTime = (unsigned long) this->par->getcurrtime();
     
     vector<MemberListEntry>::iterator it = memberNode->memberList.begin();
+    it++;   //Skip removing self
     for ( ; it != memberNode->memberList.end(); ) {
         
         if (((unsigned long)currentTime - (unsigned long)it->timestamp) >= (unsigned long)TREMOVE) {
@@ -491,7 +491,7 @@ void MP1Node::removeStaleMembers() {
             string peerAddressStr = string(s);
             Address peerAddr(peerAddressStr);
             
-#ifdef DEBUGLOG
+#ifdef DEBUGLOG2
             sprintf(s, ("Member Removed - Address: " + peerAddressStr + "\tHeartbeat: %ld\tTimestamp: %ld").c_str(), it->heartbeat, it->timestamp);
             log->LOG(&memberNode->addr, s);
 #endif    
@@ -504,16 +504,20 @@ void MP1Node::removeStaleMembers() {
 }
 
 void MP1Node::updateOwnHeartbeat() {
+#ifdef DEBUGLOG2
+    static char s[1024];
+    sprintf(s, "Before Hearbeat update\tHeartbeat: %ld\tTimestamp: %ld", memberNode->memberList[0].heartbeat, memberNode->memberList[0].timestamp);
+    log->LOG(&memberNode->addr, s);
+#endif   
+
     memberNode->heartbeat = memberNode->heartbeat+1;
-    memberNode->myPos->heartbeat = memberNode->myPos->heartbeat+1;
-    memberNode->myPos->setheartbeat(memberNode->myPos->heartbeat+1);
-    memberNode->myPos->settimestamp(par->getcurrtime());
+    memberNode->memberList[0].heartbeat = memberNode->heartbeat;
+    memberNode->memberList[0].timestamp = par->getcurrtime();
     
-    #ifdef DEBUGLOG2
-        static char s[1024];
-        sprintf(s, "Hearbeat update\tHeartbeat: %ld\tTimestamp: %ld", memberNode->heartbeat, memberNode->myPos->timestamp);
-        log->LOG(&memberNode->addr, s);
-    #endif   
+#ifdef DEBUGLOG2
+    sprintf(s, "After Hearbeat update\tHeartbeat: %ld\tTimestamp: %ld", memberNode->memberList[0].heartbeat, memberNode->memberList[0].timestamp);
+    log->LOG(&memberNode->addr, s);
+#endif   
 }
 
 /**
@@ -594,25 +598,19 @@ void MP1Node::printMemberList(vector<MemberListEntry>::const_iterator begin, vec
 void* MP1Node::prepareHeartbeatMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize) {
     int memberListSize = memberList.size() * sizeof(MemberListEntry);
     *msgSize = sizeof(MessageHdr) + sizeof(*addrPtr) + sizeof(long) + memberListSize + sizeof(int) + 1;
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 1\tsize: %d", *msgSize);
     int size = *msgSize;
     
     MessageHdr* msg = (MessageHdr *) malloc((size) * sizeof(char));
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 2");
     
     // create HEARTBEAT message
     msg->msgType = HEARTBEAT;
     memcpy((char *)(msg+1), &addrPtr->addr, sizeof(addrPtr->addr));
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 3");
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr), heartBeat, sizeof(long));
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 4");
     
     int memberListCount = memberList.size();
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long), &memberListCount, sizeof(int));
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 5");
-    
     copy( reinterpret_cast<char *>(memberList.data()), reinterpret_cast<char *>(memberList.data()) + memberListSize, (char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long) + sizeof(int));          
-    log->LOG(&memberNode->addr, "prepareHeartbeatMsg 6");
+
     return (void*)msg;
 }
 
@@ -628,7 +626,7 @@ void* prepareJoinReqMsg(Address* addrPtr, long* heartBeat, size_t* msgSize) {
     return (void*)msg;
 }
 
-void* prepareJoinRepMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize) {
+void* MP1Node::prepareJoinRepMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntry>& memberList, size_t* msgSize) {
     size_t memberListSize = memberList.size() * sizeof(MemberListEntry);
     *msgSize = sizeof(MessageHdr) + sizeof(*addrPtr) + sizeof(long) + memberListSize + sizeof(int) + 1;
     MessageHdr* msg = (MessageHdr *) malloc((*msgSize) * sizeof(char));
@@ -637,7 +635,7 @@ void* prepareJoinRepMsg(Address* addrPtr, long* heartBeat, vector<MemberListEntr
     msg->msgType = JOINREP;
     memcpy((char *)(msg+1), &addrPtr->addr, sizeof(addrPtr->addr));
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr), heartBeat, sizeof(long));
-    
+
     int memberListCount = memberList.size();
     memcpy((char *)(msg+1) + 1 + sizeof(*addrPtr) + sizeof(long), &memberListCount, sizeof(int));
     
